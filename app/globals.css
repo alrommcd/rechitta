@@ -1,0 +1,128 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+:root {
+  --background: #04070f;
+  --foreground: #e2e8f0;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans, Arial, sans-serif);
+}
+
+.chat-input::placeholder { color: rgba(148, 163, 184, 0.3); }
+.chat-input:focus        { outline: none; border-color: rgba(96, 165, 250, 0.32) !important; }
+
+/* ── Frosted glass speech bubble with tail ───────────────────── */
+
+.speech-bubble {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 16px;
+  padding: 7px 13px;
+  position: relative;
+  white-space: nowrap;
+  font-style: italic;
+  letter-spacing: 0.01em;
+  pointer-events: none;
+  user-select: none;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+/* tail points down-left for LTR bubbles */
+.speech-bubble::after {
+  content: '';
+  position: absolute;
+  bottom: -7px;
+  left: 14px;
+  width: 0; height: 0;
+  border-top: 8px solid rgba(255, 255, 255, 0.12);
+  border-right: 9px solid transparent;
+}
+
+/* tail points down-right for RTL bubbles */
+.speech-bubble-rtl::after {
+  left: auto;
+  right: 14px;
+  border-right: none;
+  border-left: 9px solid transparent;
+  border-top: 8px solid rgba(255, 255, 255, 0.12);
+}
+
+/* ── River flow animations for FAQ bubbles ───────────────────── */
+
+/* Outer div: pure linear X travel */
+@keyframes riverXRTL {
+  from { transform: translateX(calc(100vw + 320px)); }
+  to   { transform: translateX(-320px); }
+}
+@keyframes riverXLTR {
+  from { transform: translateX(-320px); }
+  to   { transform: translateX(calc(100vw + 320px)); }
+}
+/* Inner div: sine-wave Y undulation — period independent of X duration */
+@keyframes waveY {
+  0%   { transform: translateY(0px);   }
+  25%  { transform: translateY(-13px); }
+  50%  { transform: translateY(0px);   }
+  75%  { transform: translateY(13px);  }
+  100% { transform: translateY(0px);   }
+}
+/* Inner div: fade envelope — keyed to same duration as X travel */
+@keyframes fadeBubble {
+  0%   { opacity: 0; }
+  8%   { opacity: 1; }
+  92%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ── Orb ring animations ─────────────────────────────────────── */
+
+/* rings positioned with top:50%;left:50% — translate baked into keyframe */
+@keyframes expandRing {
+  0%   { transform: translate(-50%,-50%) scale(1);   opacity: 0.55; }
+  100% { transform: translate(-50%,-50%) scale(2.8); opacity: 0; }
+}
+
+@keyframes speakPulse {
+  0%, 100% { transform: translate(-50%,-50%) scale(1);   opacity: 0.28; }
+  50%       { transform: translate(-50%,-50%) scale(1.12); opacity: 0.6; }
+}
+
+/* ── Idle orb float + breathe (overlay, no rotation) ─────────── */
+@keyframes orbFloat {
+  0%   { transform: translate(0px,  0px)  scale(1.0); }
+  25%  { transform: translate(0px, -8px)  scale(1.016); }
+  55%  { transform: translate(3px, -6px)  scale(1.022); }
+  78%  { transform: translate(-2px, 4px)  scale(1.012); }
+  100% { transform: translate(0px,  0px)  scale(1.0); }
+}
+
+/* ── UI animations ───────────────────────────────────────────── */
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes thinkingDot {
+  0%, 100% { transform: scale(1);    opacity: 0.55; }
+  50%       { transform: scale(1.22); opacity: 1; }
+}
+
+@keyframes statusFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
