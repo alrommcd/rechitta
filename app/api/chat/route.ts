@@ -36,7 +36,11 @@ export interface ChatMessage {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { messages, inputType = 'text' }: { messages: ChatMessage[]; inputType?: InputType } = body
+    const {
+      messages,
+      inputType = 'text',
+      focusProjectId,
+    }: { messages: ChatMessage[]; inputType?: InputType; focusProjectId?: number } = body
 
     if (!messages || messages.length === 0) {
       return NextResponse.json({ error: 'No messages provided' }, { status: 400 })
@@ -74,6 +78,14 @@ export async function POST(req: NextRequest) {
         ? `\nQUERY DISAMBIGUATION: The user's phrasing appears to refer to "${matchedProject.project_name}" — this is the closest project in the database to what they said. Answer about this project if appropriate, but only from the verified data above.\n`
         : ''
 
+    // When the user is in the property-specific assistant, narrow the focus.
+    const focusProject = focusProjectId != null
+      ? projects.find((p) => p.id === focusProjectId) ?? null
+      : null
+    const focusNote = focusProject?.project_name
+      ? `\nPROPERTY FOCUS: The user is in a dedicated assistant for "${focusProject.project_name}". Answer questions about this property first. If asked about another property, you may briefly answer but gently redirect. All grounding rules still apply.\n`
+      : ''
+
     const systemWithData = `${buildSystemPrompt(inputType)}
 
 ---
@@ -81,7 +93,7 @@ VERIFIED PROPERTY DATABASE (as of this session):
 
 ${dataContext}
 ---
-${disambiguationNote}
+${focusNote}${disambiguationNote}
 Answer only from the data above.`
 
     const aiMessages: AiMessage[] = messages.map((m) => ({

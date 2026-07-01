@@ -42,7 +42,7 @@ export default function DataCard({ project: p }: Props) {
 
   const priceDisplay =
     p.starting_price !== null
-      ? `${p.price_currency ? p.price_currency + ' ' : ''}${p.starting_price.toLocaleString()}`
+      ? `${p.price_currency ? p.price_currency + ' ' : ''}${p.starting_price}`
       : null
 
   const shareText = [

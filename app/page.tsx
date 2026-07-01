@@ -4,9 +4,14 @@ import { useState, useRef, useEffect } from 'react'
 import type { CSSProperties } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import dynamic from 'next/dynamic'
 import DataCard from '@/components/DataCard'
+import Dashboard from '@/components/Dashboard'
+import LandingPage from '@/components/LandingPage'
 import { Project } from '@/lib/supabase'
 import { speak, TtsControls } from '@/lib/tts'
+
+const Orb = dynamic(() => import('@/components/Orb'), { ssr: false, loading: () => null })
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -30,14 +35,97 @@ interface Message {
   fromVoice?: boolean
 }
 
-type Screen    = 'landing' | 'assistant'
+type Screen    = 'landing' | 'dashboard' | 'assistant' | 'property'
 type VoiceMode = 'idle' | 'recording'
 type TtsStatus = 'idle' | 'playing' | 'paused'
 type OrbState  = 'idle' | 'recording' | 'thinking' | 'speaking'
 
+// ─── Property curated content (marketing copy — NOT DB-grounded) ──────────────
+// The assistant Q&A stays grounded in the DB; this panel is web-curated flavor.
+
+const PROPERTY_CONTENT: Record<string, {
+  description: string
+  highlights: string[]
+  questions: string[]
+}> = {
+  'Jacob & Co. Residences': {
+    description: 'A landmark branded residence in Business Bay, crafted in collaboration with Jacob & Co. — the Swiss jeweller synonymous with ultra-luxury.',
+    highlights: [
+      'Exclusive collection of 23 residences',
+      '60/40 plan (60% construction, 40% on handover)',
+      '1–3 BR homes from 1,250 sqft',
+      'Branded luxury in the heart of Business Bay',
+    ],
+    questions: ["What's the payment plan?", 'How many units are left?', "What's the handover date?", 'Is the price VAT-inclusive?'],
+  },
+  'Berkeley Square': {
+    description: 'A refined contemporary development by Prestige One offering studio to 2-bedroom homes in Jumeirah Village Circle.',
+    highlights: [
+      '30 of 79 units still available',
+      'Starting from AED 730,000',
+      'Flexible 50/50 payment plan',
+      'Handover date not yet confirmed',
+    ],
+    questions: ['How many units are left?', "What's the starting price?", 'When does it hand over?', "What's the service charge?"],
+  },
+  'Wadi Villas': {
+    description: "An ultra-luxury villa compound nestled within Al Barari's lush botanical landscape — one of Dubai's most exclusive private addresses.",
+    highlights: [
+      'Ultra-rare: only 2 villas, 1 still available',
+      '640 sqm per villa — square metres, not sqft',
+      'Cash or 70/30 payment plan',
+      "Private green enclave in Al Barari",
+    ],
+    questions: ['Is the villa still available?', "What's the area size?", "What's the payment plan?", 'Who is the developer?'],
+  },
+  'JW Marriott Residences': {
+    description: 'Branded residences under the JW Marriott name in Downtown Dubai — full hotel services, prime location, and a prestigious address.',
+    highlights: [
+      'Fully sold out — waitlist only',
+      'Downtown Dubai address',
+      '2–4 BR homes from AED 2,448,000',
+      'Handover Q1 2028',
+    ],
+    questions: ['Is there a waitlist?', "What's the starting price?", 'When is the handover?', "What's the payment plan?"],
+  },
+  'Ryze': {
+    description: 'A community-focused development by Aum Development in Dubai Sports City — designed for quality-conscious investors at an accessible entry point.',
+    highlights: [
+      'Lowest entry price in the current dataset',
+      'From AED 602,555 — price EXCLUDES 5% VAT',
+      'Flexible 1% monthly payment plan',
+      'Studio to 1 BR homes from 710 sqft',
+    ],
+    questions: ['Is the price VAT-inclusive?', "What's the full price with VAT?", 'How many units are left?', "What's the payment plan?"],
+  },
+  'Marafid': {
+    description: "A large-scale Marina-fronted development by Foster Developers offering 1–2 BR homes in one of Dubai's most liquid markets.",
+    highlights: [
+      '153 of 223 units still available',
+      'AED 18/sqft/yr service charge — the only published figure in this dataset',
+      'Dubai Marina location',
+      '30/70 payment plan, handover Q3 2026',
+    ],
+    questions: ["What's the service charge?", 'How many units are available?', "What's the payment plan?", 'When is the handover?'],
+  },
+}
+
+const PROPERTY_IMAGES: Record<string, string> = {
+  'Jacob & Co. Residences': 'https://www.offplan-dubai.com/wp-content/uploads/2025/10/Jacob-Co.-Residences-feature.jpg',
+  'Berkeley Square':        'https://storage.dxboffplan.com/files/2025/07/Berkeley-Square-at-JVC-Dubai-13.png',
+  'Wadi Villas':            'https://cdn.prod.website-files.com/659564b827305f540edfb311/6596aa0d7e2ade52da948175_Exterior_01.webp',
+  'JW Marriott Residences': 'https://storage.dxboffplan.com/files/2025/10/JW-Marriott-Residences-at-Dubai-Islands-9.png',
+  'Ryze':                   'https://static.propsearch.ae/dubai-locations/ryze-by-aum_2jr5j_xl.jpg',
+  'Marafid':                '/marafid.jpg.jpg',
+}
+
+const DEFAULT_PROPERTY_CONTENT = {
+  description: 'A premium Dubai residential development with verified data available through Rechitta.',
+  highlights: ['Ask anything about this property', 'All answers grounded in verified data'],
+  questions: ['How many units are left?', "What's the price?", "What's the payment plan?", 'When is handover?'],
+}
+
 // ─── FAQ river bubble data ────────────────────────────────────────────────────
-// topPct: % from top within sky container (capped at ~40% of screen)
-// layer 0=back(slow,transparent) 1=mid 2=front(faster,opaque)
 
 const FAQ_BUBBLE_DATA = [
   { text: 'Units left in Berkeley Square?', layer: 0, topPct:  7, dir: 'rtl', dur: 44, delay: -8  },
@@ -51,13 +139,9 @@ const FAQ_BUBBLE_DATA = [
   { text: 'English · हिंदी',              layer: 1, topPct: 48, dir: 'ltr', dur: 31, delay: -18 },
 ] as const
 
-// Per-layer visual properties
 const LAYER_PROPS = [
-  // back: small, transparent, behind orb glow
   { fontSize: 11, colorOp: 0.62, z: 2 },
-  // mid: normal
   { fontSize: 13, colorOp: 0.82, z: 3 },
-  // front: larger, sharper, can overlap orb rings
   { fontSize: 14, colorOp: 0.96, z: 6 },
 ]
 
@@ -65,38 +149,23 @@ const LAYER_PROPS = [
 
 function FaqBubbles({ visible }: { visible: boolean }) {
   return (
-    // Sky zone: top 42% of screen, clipped so bubbles stay above the skyline
-    <div
-      style={{
-        position: 'absolute',
-        top: 0, left: 0, right: 0,
-        height: '42%',
-        overflow: 'hidden',
-        pointerEvents: 'none',
-        opacity: visible ? 1 : 0,
-        transition: 'opacity 0.9s ease',
-        zIndex: 0,
-      }}
-    >
+    <div style={{
+      position: 'absolute', top: 0, left: 0, right: 0,
+      height: '42%', overflow: 'hidden',
+      pointerEvents: 'none',
+      opacity: visible ? 1 : 0,
+      transition: 'opacity 0.9s ease',
+      zIndex: 0,
+    }}>
       {FAQ_BUBBLE_DATA.map((b, i) => {
         const lp = LAYER_PROPS[b.layer]
-        // Outer div: X travel only (linear). Layer max-opacity applied here so
-        // the inner fadeBubble (0→1→1→0) multiplies against it correctly.
-        // Inner div: sine-wave Y undulation + fade envelope.
         return (
-          <div
-            key={i}
-            style={{
-              position: 'absolute',
-              top: `${b.topPct}%`,
-              left: 0,
-              animation: `${b.dir === 'rtl' ? 'riverXRTL' : 'riverXLTR'} ${b.dur}s linear ${b.delay}s infinite`,
-              zIndex: lp.z,
-              opacity: lp.colorOp,
-            }}
-          >
+          <div key={i} style={{
+            position: 'absolute', top: `${b.topPct}%`, left: 0,
+            animation: `${b.dir === 'rtl' ? 'riverXRTL' : 'riverXLTR'} ${b.dur}s linear ${b.delay}s infinite`,
+            zIndex: lp.z, opacity: lp.colorOp,
+          }}>
             <div style={{
-              // waveY period fixed at 10s → 2–4 sine cycles per bubble pass
               animation: `waveY 10s ease-in-out ${b.delay}s infinite, fadeBubble ${b.dur}s linear ${b.delay}s infinite`,
             }}>
               <span
@@ -113,19 +182,11 @@ function FaqBubbles({ visible }: { visible: boolean }) {
   )
 }
 
-// ─── Orb glow overlay (listening + speaking states) ───────────────────────────
+// ─── Orb glow overlay (recording + thinking states) ───────────────────────────
 
-function OrbGlow({
-  orbState,
-  audioLevel,
-  orbSize,
-}: {
-  orbState: OrbState
-  audioLevel: number
-  orbSize: number
+function OrbGlow({ orbState, audioLevel, orbSize }: {
+  orbState: OrbState; audioLevel: number; orbSize: number
 }) {
-  // Only show full glow + rings while actively recording (listening).
-  // Thinking gets a faint rim only. Speaking/idle: nothing.
   const isRec      = orbState === 'recording'
   const isThinking = orbState === 'thinking'
   if (!isRec && !isThinking) return null
@@ -133,18 +194,12 @@ function OrbGlow({
   const ringBase = orbSize + 16
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        top: '50%', left: '50%',
-        transform: 'translate(-50%, -50%)',
-        width: orbSize, height: orbSize,
-        borderRadius: '50%',
-        pointerEvents: 'none',
-        zIndex: 5,
-      }}
-    >
-      {/* Rim glow — strong while recording, faint while thinking */}
+    <div style={{
+      position: 'absolute', top: '50%', left: '50%',
+      transform: 'translate(-50%, -50%)',
+      width: orbSize, height: orbSize,
+      borderRadius: '50%', pointerEvents: 'none', zIndex: 5,
+    }}>
       <div style={{
         position: 'absolute', inset: 0, borderRadius: '50%',
         border: isRec
@@ -157,14 +212,10 @@ function OrbGlow({
           : '0 0 12px 3px rgba(80,140,255,0.1)',
         transition: isRec ? 'all 0.1s ease' : 'all 0.5s ease',
       }} />
-
-      {/* Expanding rings — ONLY while recording */}
       {isRec && (
         <div style={{
-          position: 'absolute',
-          top: '50%', left: '50%',
-          width: ringBase, height: ringBase,
-          borderRadius: '50%',
+          position: 'absolute', top: '50%', left: '50%',
+          width: ringBase, height: ringBase, borderRadius: '50%',
           border: `1px solid rgba(100,155,255,${0.45 + audioLevel * 0.35})`,
           animation: 'expandRing 1.4s ease-out infinite',
           transition: 'border-color 0.1s ease',
@@ -172,23 +223,17 @@ function OrbGlow({
       )}
       {isRec && (
         <div style={{
-          position: 'absolute',
-          top: '50%', left: '50%',
-          width: ringBase, height: ringBase,
-          borderRadius: '50%',
+          position: 'absolute', top: '50%', left: '50%',
+          width: ringBase, height: ringBase, borderRadius: '50%',
           border: `1px solid rgba(100,155,255,${0.28 + audioLevel * 0.22})`,
           animation: 'expandRing 1.4s ease-out 0.5s infinite',
         }} />
       )}
-
-      {/* Bloom — strong while recording, absent while thinking */}
       {isRec && (
         <div style={{
-          position: 'absolute',
-          top: '50%', left: '50%',
+          position: 'absolute', top: '50%', left: '50%',
           transform: 'translate(-50%, -50%)',
-          width: orbSize * 2, height: orbSize * 2,
-          borderRadius: '50%',
+          width: orbSize * 2, height: orbSize * 2, borderRadius: '50%',
           background: `radial-gradient(circle, rgba(60,110,255,${0.12 + audioLevel * 0.2}) 0%, transparent 65%)`,
           filter: 'blur(16px)',
           transition: 'all 0.12s ease',
@@ -201,8 +246,8 @@ function OrbGlow({
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function Home() {
-  const [screen, setScreen]                       = useState<Screen>('landing')
-  const [landingHovered, setLandingHovered]       = useState(false)
+  const [screen, setScreen]                 = useState<Screen>('landing')
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null)
 
   // Chat
   const [messages, setMessages] = useState<Message[]>([])
@@ -220,6 +265,9 @@ export default function Home() {
   const [ttsStatus, setTtsStatus]       = useState<TtsStatus>('idle')
   const [activeTtsIdx, setActiveTtsIdx] = useState<number | null>(null)
 
+  // Transition
+  const [transitioning, setTransitioning] = useState(false)
+
   // Refs
   const recognitionRef      = useRef<SpeechRecognitionInstance | null>(null)
   const audioCtxRef         = useRef<AudioContext | null>(null)
@@ -229,6 +277,35 @@ export default function Home() {
   const ttsRef              = useRef<TtsControls | null>(null)
   const latestTranscriptRef = useRef('')
   const stoppingRef         = useRef(false)
+
+  // ── Navigation helpers ─────────────────────────────────────────────────────
+
+  function navigate(to: Screen, prepare?: () => void) {
+    setTransitioning(true)
+    setTimeout(() => {
+      prepare?.()
+      setScreen(to)
+      setTimeout(() => setTransitioning(false), 80)
+    }, 300)
+  }
+
+  function openAssistant() {
+    navigate('assistant', () => { setMessages([]); setSelectedProject(null); setError(null) })
+  }
+
+  function selectProperty(project: Project) {
+    navigate('property', () => { setMessages([]); setSelectedProject(project); setError(null) })
+  }
+
+  function goToDashboard() {
+    ttsRef.current?.stop()
+    navigate('dashboard', () => { setTtsStatus('idle'); setActiveTtsIdx(null); setMessages([]); setSelectedProject(null); setError(null) })
+  }
+
+  function goToLanding() {
+    ttsRef.current?.stop()
+    navigate('landing', () => { setTtsStatus('idle'); setActiveTtsIdx(null); setMessages([]); setSelectedProject(null); setError(null) })
+  }
 
   // ── Init ───────────────────────────────────────────────────────────────────
 
@@ -263,13 +340,17 @@ export default function Home() {
     setMessages(outgoing)
     setLoading(true)
     try {
+      const bodyPayload: Record<string, unknown> = {
+        inputType,
+        messages: outgoing.map(({ role, content }) => ({ role, content })),
+      }
+      if (screen === 'property' && selectedProject) {
+        bodyPayload.focusProjectId = selectedProject.id
+      }
       const res  = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          inputType,
-          messages: outgoing.map(({ role, content }) => ({ role, content })),
-        }),
+        body: JSON.stringify(bodyPayload),
       })
       const data = await res.json()
       if (!res.ok || data.error) {
@@ -411,132 +492,240 @@ export default function Home() {
 
   const isRec       = orbState === 'recording'
   const hasMessages = messages.length > 0
-
-  // FAQ bubbles visible when idle with no conversation and not recording
   const bubblesVisible = !hasMessages && !isRec
+
+  // ── Transition overlay (shared) ────────────────────────────────────────────
+
+  const transitionOverlay = (
+    <div style={{
+      position: 'fixed', inset: 0,
+      background: '#050607',
+      zIndex: 99999,
+      opacity: transitioning ? 1 : 0,
+      pointerEvents: transitioning ? 'all' : 'none',
+      transition: 'opacity 0.3s cubic-bezier(0.4,0,0.2,1)',
+    }} />
+  )
 
   // ── LANDING SCREEN ─────────────────────────────────────────────────────────
 
   if (screen === 'landing') {
-    // ── Position / size constants — all values are % of viewport ─────────────
-    //
-    // CLICK ZONE (full orb area — keep large so any click on the orb works)
-    // ORB_LEFT / ORB_TOP  center of the orb in the PNG (object-fit:cover)
-    // ORB_SIZE            diameter of the clickable circle
-    const ORB_LEFT = '55%'
-    const ORB_TOP  = '46%'
-    const ORB_SIZE = 'clamp(260px, 28vw, 420px)'
-
-    // HOVER GLOW RING (tight circle around the R logo only)
-    // The R logo is centered inside the orb, so RING_LEFT/RING_TOP start equal
-    // to ORB_LEFT/ORB_TOP. Nudge them independently if the ring drifts off the R.
-    const RING_LEFT = '62%'                        // adjust left/right: lower % = left, higher % = right
-    const RING_TOP  = '43%'                        // adjust up/down:    lower % = up,   higher % = down
-    const RING_SIZE = 'clamp(200px, 17vw, 265px)' // diameter of the visible glow ring
-    // ─────────────────────────────────────────────────────────────────────────
-
     return (
-      <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden', background: '#0a0a10' }}>
+      <>
+        <LandingPage onEnterApp={() => navigate('dashboard')} />
+        {transitionOverlay}
+      </>
+    )
+  }
 
-        {/* Static full-scene background */}
-        <img
-          src="/landing.png.png"
-          alt=""
-          style={{
-            position: 'absolute', inset: 0,
-            width: '100%', height: '100%',
-            objectFit: 'cover',
-            objectPosition: 'center center',
-            zIndex: 0,
-          }}
+  // ── DASHBOARD SCREEN ───────────────────────────────────────────────────────
+
+  if (screen === 'dashboard') {
+    return (
+      <>
+        <Dashboard
+          onOpenAssistant={openAssistant}
+          onSelectProperty={selectProperty}
+          onBackToLanding={goToLanding}
         />
+        {transitionOverlay}
+      </>
+    )
+  }
 
-        {/* Nav — transparent so the baked-in PNG text shows through */}
-        <nav style={{
-          position: 'absolute', top: 0, left: 0, right: 0,
-          zIndex: 20,
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          padding: '20px 26px',
-        }}>
-          <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em', color: 'transparent' }}>
-            Rechitta
-          </span>
-          <span style={{ fontSize: 11, color: 'transparent', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-            Dubai Property AI
-          </span>
-        </nav>
+  // ── SHARED ASSISTANT / PROPERTY SCREEN RENDER ──────────────────────────────
 
-        {/* Hover glow ring — centered on the R logo, smaller than the full orb */}
-        <div style={{
-          position: 'absolute',
-          top: RING_TOP, left: RING_LEFT,
-          transform: 'translate(-50%, -50%)',
-          width: RING_SIZE, height: RING_SIZE,
-          borderRadius: '50%',
-          border: `1.5px solid rgba(160,200,255,${landingHovered ? 0.65 : 0})`,
-          boxShadow: landingHovered
-            ? '0 0 36px 12px rgba(80,140,255,0.2), 0 0 80px rgba(60,100,255,0.1)'
-            : 'none',
-          transition: 'border-color 0.35s ease, box-shadow 0.35s ease',
-          pointerEvents: 'none',
-          zIndex: 10,
-        }} />
+  const isProperty = screen === 'property' && selectedProject !== null
+  const propContent = isProperty && selectedProject
+    ? (PROPERTY_CONTENT[selectedProject.project_name ?? ''] ?? DEFAULT_PROPERTY_CONTENT)
+    : DEFAULT_PROPERTY_CONTENT
 
-        {/* Click zone — full orb size so the whole sphere is clickable */}
-        <div
-          onMouseEnter={() => setLandingHovered(true)}
-          onMouseLeave={() => setLandingHovered(false)}
-          onClick={() => setScreen('assistant')}
-          style={{
-            position: 'absolute',
-            top: ORB_TOP, left: ORB_LEFT,
-            transform: 'translate(-50%, -50%)',
-            width: ORB_SIZE, height: ORB_SIZE,
-            borderRadius: '50%',
-            cursor: 'pointer',
-            zIndex: 15,
-          }}
-        />
+  // Orb sizes: property uses a smaller CSS orb, assistant uses the video-embedded one
+  const ORB_GLOW_PX  = isProperty ? 150 : 220
+  const PROP_STATUS_TOP = isProperty ? 'calc(50% + 96px)' : 'calc(50% + 136px)'
+
+  // ── Message render helper ──────────────────────────────────────────────────
+
+  function renderMessages() {
+    if (!hasMessages) return null
+    return (
+      <div style={{
+        position: 'absolute',
+        top: 64, bottom: 80, left: 0, right: 0,
+        overflowY: 'auto', overflowX: 'hidden',
+        zIndex: 7, padding: '12px 16px',
+        maskImage: 'linear-gradient(to bottom, transparent 0%, black 6%, black 92%, transparent 100%)',
+        WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 6%, black 92%, transparent 100%)',
+      }}>
+        <div style={{ maxWidth: 680, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {messages.map((msg, i) => (
+            <div key={i} style={{
+              display: 'flex',
+              justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
+              animation: 'fadeInUp 0.3s ease both',
+            }}>
+              {msg.role === 'user' ? (
+                <div style={{
+                  maxWidth: '76%',
+                  background: 'rgba(255,255,255,0.1)',
+                  backdropFilter: 'blur(14px)',
+                  border: '1px solid rgba(255,255,255,0.18)',
+                  borderRadius: '18px 18px 4px 18px',
+                  padding: '10px 15px',
+                  fontSize: 14, lineHeight: 1.55,
+                  color: 'rgba(255,255,255,0.92)',
+                  textShadow: '0 1px 4px rgba(0,0,0,0.4)',
+                }}>
+                  {msg.fromVoice && (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(180,210,255,0.55)', marginBottom: 4 }}>
+                      <IconMic size={9} /> Voice
+                    </span>
+                  )}
+                  {msg.content}
+                </div>
+              ) : (
+                <div style={{ maxWidth: '82%', width: '100%' }}>
+                  <div style={{
+                    background: 'rgba(4,8,22,0.72)',
+                    backdropFilter: 'blur(16px)',
+                    border: '1px solid rgba(255,255,255,0.09)',
+                    borderRadius: '18px 18px 18px 4px',
+                    padding: '13px 16px',
+                    fontSize: 14, lineHeight: 1.65,
+                    color: 'rgba(255,255,255,0.88)',
+                  }}>
+                    <span style={{ display: 'block', fontSize: 10, color: 'rgba(140,180,255,0.55)', letterSpacing: '0.09em', textTransform: 'uppercase', marginBottom: 9 }}>
+                      Rechitta
+                    </span>
+                    <div className="prose prose-sm prose-invert max-w-none prose-p:my-1 prose-p:leading-relaxed prose-strong:text-white prose-strong:font-semibold prose-ul:my-1 prose-ul:pl-4 prose-li:my-0.5 prose-headings:text-white">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                      {activeTtsIdx === i ? (
+                        <>
+                          <button onClick={togglePause} style={ttsBtnStyle} title={ttsStatus === 'playing' ? 'Pause' : 'Resume'}>
+                            {ttsStatus === 'playing' ? <IconPause /> : <IconPlay />}
+                          </button>
+                          <button onClick={stopTts} style={{ ...ttsBtnStyle, color: 'rgba(148,163,184,0.4)' }} title="Stop">
+                            <IconStop />
+                          </button>
+                          <span style={{ fontSize: 11, color: 'rgba(140,180,255,0.5)' }}>
+                            {ttsStatus === 'playing' ? 'Speaking…' : 'Paused'}
+                          </span>
+                        </>
+                      ) : (
+                        <button onClick={() => startTts(msg.content, i)} style={{ ...ttsBtnStyle, display: 'flex', alignItems: 'center', gap: 6, color: 'rgba(148,163,184,0.35)' }}>
+                          <IconSpeaker /><span style={{ fontSize: 11 }}>Listen</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {msg.project && <DataCard project={msg.project} />}
+                </div>
+              )}
+            </div>
+          ))}
+
+          {loading && (
+            <div style={{ display: 'flex', justifyContent: 'flex-start', animation: 'fadeInUp 0.3s ease both' }}>
+              <div style={{ background: 'rgba(4,8,22,0.72)', backdropFilter: 'blur(16px)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: '18px 18px 18px 4px', padding: '13px 16px' }}>
+                <span style={{ display: 'block', fontSize: 10, color: 'rgba(140,180,255,0.55)', letterSpacing: '0.09em', textTransform: 'uppercase', marginBottom: 9 }}>Rechitta</span>
+                <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+                  {[0, 1, 2].map((d) => (
+                    <div key={d} style={{ width: 6, height: 6, borderRadius: '50%', background: 'rgba(100,155,255,0.55)', animation: `thinkingDot 1.2s ease-in-out ${d * 160}ms infinite` }} />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {error && hasMessages && (
+            <div style={{ background: 'rgba(30,4,4,0.75)', backdropFilter: 'blur(12px)', border: '1px solid rgba(239,68,68,0.22)', borderRadius: 14, padding: '10px 14px', fontSize: 13, color: 'rgba(252,165,165,0.82)', animation: 'fadeInUp 0.3s ease both' }}>
+              {error}
+            </div>
+          )}
+
+          <div ref={bottomRef} />
+        </div>
       </div>
     )
   }
 
-  // ── ASSISTANT SCREEN ───────────────────────────────────────────────────────
+  function renderInputBar() {
+    if (voiceMode !== 'idle') return null
+    return (
+      <div style={{
+        position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 15,
+        padding: '14px 20px 20px',
+        background: hasMessages ? 'rgba(0,0,0,0.3)' : 'transparent',
+        backdropFilter: hasMessages ? 'blur(12px)' : 'none',
+        borderTop: hasMessages ? '1px solid rgba(255,255,255,0.06)' : '1px solid transparent',
+        transition: 'background 0.6s ease, border-color 0.6s ease',
+      }}>
+        <form onSubmit={handleTextSubmit} style={{ maxWidth: 800, margin: '0 auto', display: 'flex', gap: 8 }}>
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Ask about any Dubai property…"
+            disabled={loading}
+            className="chat-input"
+            style={{
+              flex: 1,
+              background: 'rgba(255,255,255,0.08)',
+              backdropFilter: 'blur(16px)',
+              WebkitBackdropFilter: 'blur(16px)',
+              border: '1px solid rgba(255,255,255,0.14)',
+              borderRadius: 14, padding: '12px 18px',
+              fontSize: 14, color: 'rgba(255,255,255,0.9)',
+              opacity: loading ? 0.5 : 1,
+              transition: 'border-color 0.2s ease, opacity 0.2s ease',
+              textShadow: '0 1px 3px rgba(0,0,0,0.3)',
+            }}
+          />
+          <button
+            type="submit"
+            disabled={loading || !input.trim()}
+            style={{
+              padding: '12px 20px', borderRadius: 14, flexShrink: 0,
+              background: !loading && input.trim() ? 'rgba(80,130,255,0.2)' : 'rgba(255,255,255,0.06)',
+              backdropFilter: 'blur(16px)',
+              border: `1px solid ${!loading && input.trim() ? 'rgba(120,170,255,0.35)' : 'rgba(255,255,255,0.1)'}`,
+              color: !loading && input.trim() ? 'rgba(255,255,255,0.9)' : 'rgba(200,220,255,0.28)',
+              fontSize: 14, cursor: !loading && input.trim() ? 'pointer' : 'default',
+              transition: 'all 0.2s ease',
+            }}
+          >Send</button>
+        </form>
+      </div>
+    )
+  }
 
-  // Glow ring size (matches visual orb diameter in the video)
-  const ORB_GLOW_PX = 220
+  // ── ASSISTANT / PROPERTY SCREEN ────────────────────────────────────────────
 
   return (
     <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden', background: '#000' }}>
 
-      {/* Fullscreen video background */}
-      <video
-        src="/assistant-orb.mp4.mp4"
-        autoPlay muted loop playsInline
-        style={{
-          position: 'absolute', inset: 0,
-          width: '100%', height: '100%',
-          objectFit: 'cover',
-          objectPosition: 'center center',
-          zIndex: 0,
-        }}
-      />
+      {/* Subtle ambient gradient — both screens */}
+      <div style={{
+        position: 'absolute', inset: 0,
+        background: 'radial-gradient(ellipse at 55% 45%, rgba(80,10,120,0.06) 0%, transparent 60%)',
+        zIndex: 0,
+      }} />
 
-      {/* Subtle dark veil — improves text readability without killing the scene */}
+      {/* Subtle dark veil */}
       <div style={{
         position: 'absolute', inset: 0,
         background: 'rgba(0,0,0,0.2)',
-        pointerEvents: 'none',
-        zIndex: 1,
+        pointerEvents: 'none', zIndex: 1,
       }} />
 
-      {/* FAQ bubbles — sky zone, top 42%, river flow */}
-      <FaqBubbles visible={bubblesVisible} />
+      {/* FAQ bubbles — general assistant only */}
+      {!isProperty && <FaqBubbles visible={bubblesVisible} />}
 
       {/* Nav */}
       <nav style={{
-        position: 'absolute', top: 0, left: 0, right: 0,
-        zIndex: 20,
+        position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20,
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         padding: '18px 22px',
         background: hasMessages ? 'rgba(0,0,0,0.35)' : 'transparent',
@@ -545,37 +734,107 @@ export default function Home() {
         transition: 'background 0.7s ease, border-color 0.7s ease',
       }}>
         <button
-          onClick={() => { setScreen('landing') }}
+          onClick={isProperty ? goToDashboard : goToLanding}
           style={{
             fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em',
             color: 'rgba(255,255,255,0.92)',
             background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+            display: 'flex', alignItems: 'center', gap: 6,
           }}
         >
-          Rechitta
+          {isProperty ? '← Dashboard' : 'Rechitta'}
         </button>
-        <span style={{ fontSize: 10, color: 'rgba(200,220,255,0.38)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+        {isProperty && selectedProject && (
+          <span style={{
+            fontSize: 11, color: 'rgba(140,178,255,0.45)',
+            letterSpacing: '0.08em',
+          }}>
+            {selectedProject.project_name}
+          </span>
+        )}
+        <span style={{ fontSize: 10, color: 'rgba(200,220,255,0.3)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
           Dubai Property AI
         </span>
       </nav>
 
-      {/* ── Orb click zone + glow overlay — centered, large enough to cover full orb ── */}
-      <div
-        style={{
+      {/* Property left panel — blended into scene, hidden once chat starts */}
+      {isProperty && selectedProject && !hasMessages && (
+        <div style={{
           position: 'absolute',
-          top: '50%', left: '50%',
-          transform: 'translate(-50%, -50%)',
-          zIndex: 8,
-          // Explicit size: large enough to cover the entire visible orb in the video.
-          // The glow rings (ORB_GLOW_PX) are smaller and centered inside this zone.
-          width: 'clamp(300px, 44vmin, 540px)',
-          height: 'clamp(300px, 44vmin, 540px)',
-        }}
-      >
-        {/* Glow rings — centered within the wrapper via OrbGlow's own positioning */}
+          left: '5%', top: '50%',
+          transform: 'translateY(-50%)',
+          width: '30%', zIndex: 4,
+          maskImage: 'linear-gradient(to right, black 45%, transparent 95%)',
+          WebkitMaskImage: 'linear-gradient(to right, black 45%, transparent 95%)',
+          animation: 'fadeInUp 0.55s ease both',
+          pointerEvents: 'none',
+        }}>
+          {/* Property image */}
+          {PROPERTY_IMAGES[selectedProject.project_name ?? ''] && (
+            <div style={{
+              width: '100%', height: 148, overflow: 'hidden',
+              borderRadius: 10, marginBottom: 14, flexShrink: 0,
+            }}>
+              <img
+                src={PROPERTY_IMAGES[selectedProject.project_name ?? '']}
+                alt={selectedProject.project_name ?? ''}
+                style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center', display: 'block' }}
+              />
+            </div>
+          )}
+
+          <p style={{
+            margin: '0 0 6px', fontSize: 9.5,
+            color: 'rgba(100,155,255,0.48)',
+            letterSpacing: '0.13em', textTransform: 'uppercase',
+          }}>
+            {selectedProject.developer ?? '—'} · {selectedProject.location ?? '—'}
+          </p>
+          <h2 style={{
+            margin: '0 0 12px', fontSize: 21, fontWeight: 700,
+            color: 'rgba(255,255,255,0.88)', letterSpacing: '-0.025em', lineHeight: 1.22,
+          }}>
+            {selectedProject.project_name}
+          </h2>
+          <p style={{
+            margin: '0 0 18px', fontSize: 13,
+            color: 'rgba(180,210,255,0.48)', lineHeight: 1.72,
+          }}>
+            {propContent.description}
+          </p>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 7 }}>
+            {propContent.highlights.map((h, i) => (
+              <li key={i} style={{
+                display: 'flex', alignItems: 'flex-start', gap: 8,
+                fontSize: 12, color: 'rgba(160,195,255,0.4)',
+              }}>
+                <span style={{ color: 'rgba(80,140,255,0.4)', flexShrink: 0, marginTop: 1 }}>·</span>
+                {h}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Orb click zone + glow — centered */}
+      <div style={{
+        position: 'absolute', top: '50%', left: '50%',
+        transform: 'translate(-50%, -50%)',
+        zIndex: 8,
+        width: isProperty ? ORB_GLOW_PX : 'clamp(300px, 44vmin, 540px)',
+        height: isProperty ? ORB_GLOW_PX : 'clamp(300px, 44vmin, 540px)',
+      }}>
         <OrbGlow orbState={orbState} audioLevel={audioLevel} orbSize={ORB_GLOW_PX} />
 
-        {/* Click zone fills the full wrapper — anywhere on the orb works */}
+        {/* Three.js orb — both assistant and property screens */}
+        <Orb
+          style={{
+            position: 'absolute', inset: 0,
+            width: 'auto', height: 'auto',
+            animation: 'orbFloat 4.5s ease-in-out infinite',
+          }}
+        />
+        {/* Transparent click zone — canvas is pointer-events:none so this fires */}
         <div
           onClick={handleOrbClick}
           title={isRec ? 'Tap to stop' : 'Tap to speak'}
@@ -583,28 +842,25 @@ export default function Home() {
             position: 'absolute', inset: 0,
             borderRadius: '50%',
             cursor: loading ? 'default' : 'pointer',
+            zIndex: 10,
           }}
         />
       </div>
 
-      {/* Status label — always visible, tells user what's happening */}
+      {/* Status label */}
       <div style={{
         position: 'absolute',
-        top: 'calc(50% + 136px)', left: '50%',
+        top: PROP_STATUS_TOP, left: '50%',
         transform: 'translateX(-50%)',
-        zIndex: 9,
-        pointerEvents: 'none',
-        textAlign: 'center',
+        zIndex: 9, pointerEvents: 'none', textAlign: 'center',
       }}>
         <span style={{
-          display: 'block',
-          fontSize: 11,
+          display: 'block', fontSize: 11,
           color: isRec
             ? 'rgba(180,210,255,0.9)'
             : orbState === 'thinking' ? 'rgba(180,210,255,0.65)'
             : 'rgba(255,255,255,0.35)',
-          letterSpacing: '0.12em',
-          textTransform: 'uppercase',
+          letterSpacing: '0.12em', textTransform: 'uppercase',
           fontStyle: 'italic',
           textShadow: '0 1px 8px rgba(0,0,0,0.7)',
           transition: 'color 0.4s ease',
@@ -617,191 +873,61 @@ export default function Home() {
         </span>
       </div>
 
-      {/* ── Chat messages overlay ── */}
-      {hasMessages && (
+      {/* Suggested question chips — property screen only, before first message */}
+      {isProperty && !hasMessages && (
         <div style={{
           position: 'absolute',
-          top: 64, // below nav
-          bottom: 80, // above input
-          left: 0, right: 0,
-          overflowY: 'auto',
-          overflowX: 'hidden',
-          zIndex: 7,
-          padding: '12px 16px',
-          // subtle gradient to fade messages into the scene at top/bottom
-          maskImage: 'linear-gradient(to bottom, transparent 0%, black 6%, black 92%, transparent 100%)',
-          WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 6%, black 92%, transparent 100%)',
+          top: 'calc(50% + 124px)', left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 9,
+          display: 'flex', flexWrap: 'wrap', gap: 7,
+          justifyContent: 'center', maxWidth: 420,
+          animation: 'fadeInUp 0.5s ease 0.18s both',
         }}>
-          <div style={{ maxWidth: 680, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
-
-            {messages.map((msg, i) => (
-              <div key={i} style={{
-                display: 'flex',
-                justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                animation: 'fadeInUp 0.3s ease both',
-              }}>
-                {msg.role === 'user' ? (
-                  <div style={{
-                    maxWidth: '76%',
-                    background: 'rgba(255,255,255,0.1)',
-                    backdropFilter: 'blur(14px)',
-                    border: '1px solid rgba(255,255,255,0.18)',
-                    borderRadius: '18px 18px 4px 18px',
-                    padding: '10px 15px',
-                    fontSize: 14, lineHeight: 1.55,
-                    color: 'rgba(255,255,255,0.92)',
-                    textShadow: '0 1px 4px rgba(0,0,0,0.4)',
-                  }}>
-                    {msg.fromVoice && (
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: 'rgba(180,210,255,0.55)', marginBottom: 4 }}>
-                        <IconMic size={9} /> Voice
-                      </span>
-                    )}
-                    {msg.content}
-                  </div>
-                ) : (
-                  <div style={{ maxWidth: '82%', width: '100%' }}>
-                    <div style={{
-                      background: 'rgba(4,8,22,0.72)',
-                      backdropFilter: 'blur(16px)',
-                      border: '1px solid rgba(255,255,255,0.09)',
-                      borderRadius: '18px 18px 18px 4px',
-                      padding: '13px 16px',
-                      fontSize: 14, lineHeight: 1.65,
-                      color: 'rgba(255,255,255,0.88)',
-                    }}>
-                      <span style={{ display: 'block', fontSize: 10, color: 'rgba(140,180,255,0.55)', letterSpacing: '0.09em', textTransform: 'uppercase', marginBottom: 9 }}>
-                        Rechitta
-                      </span>
-                      <div className="prose prose-sm prose-invert max-w-none prose-p:my-1 prose-p:leading-relaxed prose-strong:text-white prose-strong:font-semibold prose-ul:my-1 prose-ul:pl-4 prose-li:my-0.5 prose-headings:text-white">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                        {activeTtsIdx === i ? (
-                          <>
-                            <button onClick={togglePause} style={ttsBtnStyle} title={ttsStatus === 'playing' ? 'Pause' : 'Resume'}>
-                              {ttsStatus === 'playing' ? <IconPause /> : <IconPlay />}
-                            </button>
-                            <button onClick={stopTts} style={{ ...ttsBtnStyle, color: 'rgba(148,163,184,0.4)' }} title="Stop">
-                              <IconStop />
-                            </button>
-                            <span style={{ fontSize: 11, color: 'rgba(140,180,255,0.5)' }}>
-                              {ttsStatus === 'playing' ? 'Speaking…' : 'Paused'}
-                            </span>
-                          </>
-                        ) : (
-                          <button onClick={() => startTts(msg.content, i)} style={{ ...ttsBtnStyle, display: 'flex', alignItems: 'center', gap: 6, color: 'rgba(148,163,184,0.35)' }}>
-                            <IconSpeaker /><span style={{ fontSize: 11 }}>Listen</span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    {msg.project && <DataCard project={msg.project} />}
-                  </div>
-                )}
-              </div>
-            ))}
-
-            {loading && (
-              <div style={{ display: 'flex', justifyContent: 'flex-start', animation: 'fadeInUp 0.3s ease both' }}>
-                <div style={{ background: 'rgba(4,8,22,0.72)', backdropFilter: 'blur(16px)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: '18px 18px 18px 4px', padding: '13px 16px' }}>
-                  <span style={{ display: 'block', fontSize: 10, color: 'rgba(140,180,255,0.55)', letterSpacing: '0.09em', textTransform: 'uppercase', marginBottom: 9 }}>Rechitta</span>
-                  <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
-                    {[0, 1, 2].map((d) => (
-                      <div key={d} style={{ width: 6, height: 6, borderRadius: '50%', background: 'rgba(100,155,255,0.55)', animation: `thinkingDot 1.2s ease-in-out ${d * 160}ms infinite` }} />
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {error && (
-              <div style={{ background: 'rgba(30,4,4,0.75)', backdropFilter: 'blur(12px)', border: '1px solid rgba(239,68,68,0.22)', borderRadius: 14, padding: '10px 14px', fontSize: 13, color: 'rgba(252,165,165,0.82)', animation: 'fadeInUp 0.3s ease both' }}>
-                {error}
-              </div>
-            )}
-
-            <div ref={bottomRef} />
-          </div>
+          {propContent.questions.map((q, i) => (
+            <button
+              key={i}
+              onClick={() => { if (!loading) sendMessage(q, 'text') }}
+              disabled={loading}
+              style={{
+                padding: '6px 14px', borderRadius: 20,
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                color: 'rgba(180,210,255,0.58)',
+                fontSize: 11.5, cursor: loading ? 'default' : 'pointer',
+                backdropFilter: 'blur(8px)',
+                transition: 'all 0.2s ease',
+                outline: 'none',
+              }}
+            >
+              {q}
+            </button>
+          ))}
         </div>
       )}
 
-      {/* Error when no messages yet */}
+      {/* Chat messages */}
+      {renderMessages()}
+
+      {/* Standalone error (no messages yet) */}
       {error && !hasMessages && (
         <div style={{
-          position: 'absolute',
-          bottom: 100, left: '50%',
+          position: 'absolute', bottom: 100, left: '50%',
           transform: 'translateX(-50%)',
-          zIndex: 12,
-          maxWidth: 480,
+          zIndex: 12, maxWidth: 480,
           background: 'rgba(30,4,4,0.8)', backdropFilter: 'blur(12px)',
           border: '1px solid rgba(239,68,68,0.25)', borderRadius: 14,
           padding: '10px 16px', fontSize: 13, color: 'rgba(252,165,165,0.85)',
-          textAlign: 'center',
-          animation: 'fadeInUp 0.3s ease both',
+          textAlign: 'center', animation: 'fadeInUp 0.3s ease both',
         }}>
           {error}
         </div>
       )}
 
-      {/* ── Chat input bar — glassmorphism, bottom center ── */}
-      {voiceMode === 'idle' && (
-        <div style={{
-          position: 'absolute',
-          bottom: 0, left: 0, right: 0,
-          zIndex: 15,
-          padding: '14px 20px 20px',
-          background: hasMessages ? 'rgba(0,0,0,0.3)' : 'transparent',
-          backdropFilter: hasMessages ? 'blur(12px)' : 'none',
-          borderTop: hasMessages ? '1px solid rgba(255,255,255,0.06)' : '1px solid transparent',
-          transition: 'background 0.6s ease, border-color 0.6s ease',
-        }}>
-          <form
-            onSubmit={handleTextSubmit}
-            style={{ maxWidth: 800, margin: '0 auto', display: 'flex', gap: 8 }}
-          >
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask about any Dubai property…"
-              disabled={loading}
-              className="chat-input"
-              style={{
-                flex: 1,
-                background: 'rgba(255,255,255,0.08)',
-                backdropFilter: 'blur(16px)',
-                WebkitBackdropFilter: 'blur(16px)',
-                border: '1px solid rgba(255,255,255,0.14)',
-                borderRadius: 14,
-                padding: '12px 18px',
-                fontSize: 14,
-                color: 'rgba(255,255,255,0.9)',
-                opacity: loading ? 0.5 : 1,
-                transition: 'border-color 0.2s ease, opacity 0.2s ease',
-                textShadow: '0 1px 3px rgba(0,0,0,0.3)',
-              }}
-            />
-            <button
-              type="submit"
-              disabled={loading || !input.trim()}
-              style={{
-                padding: '12px 20px', borderRadius: 14, flexShrink: 0,
-                background: !loading && input.trim() ? 'rgba(80,130,255,0.2)' : 'rgba(255,255,255,0.06)',
-                backdropFilter: 'blur(16px)',
-                border: `1px solid ${!loading && input.trim() ? 'rgba(120,170,255,0.35)' : 'rgba(255,255,255,0.1)'}`,
-                color: !loading && input.trim() ? 'rgba(255,255,255,0.9)' : 'rgba(200,220,255,0.28)',
-                fontSize: 14,
-                cursor: !loading && input.trim() ? 'pointer' : 'default',
-                transition: 'all 0.2s ease',
-              }}
-            >
-              Send
-            </button>
-          </form>
-        </div>
-      )}
+      {/* Input bar */}
+      {renderInputBar()}
 
+      {transitionOverlay}
     </div>
   )
 }
